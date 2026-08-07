@@ -1,9 +1,6 @@
 import os
-import soundfile as sf
 import librosa
 import numpy as np
-import torch
-import torchaudio
 from typing import Tuple, Optional
 from config import TARGET_SAMPLE_RATE, AUDIO_LENGTH
 
@@ -19,13 +16,17 @@ class EmptyAudioError(AudioCleaningError):
 def load_audio(file_path: str, sample_rate: int = TARGET_SAMPLE_RATE) -> Tuple[np.ndarray, int]:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"Audio file not found: {file_path}")
+    data = None
+    sr = None
     try:
+        import soundfile as sf
         data, sr = sf.read(file_path, always_2d=False)
     except Exception as first_exc:
         try:
             data, sr = librosa.load(file_path, sr=None, mono=False)
         except Exception as second_exc:
             try:
+                import torchaudio
                 waveform, sr = torchaudio.load(file_path)
                 waveform = waveform.mean(dim=0).numpy()
                 data = waveform.astype(np.float32)
@@ -39,7 +40,10 @@ def load_audio(file_path: str, sample_rate: int = TARGET_SAMPLE_RATE) -> Tuple[n
     if isinstance(data, np.ndarray) and data.size == 0:
         raise EmptyAudioError(f"Audio data is empty: {file_path}")
     if data.ndim > 1:
-        data = np.mean(data, axis=1)
+        if data.shape[0] <= 2 and data.shape[1] > 2:
+            data = np.mean(data, axis=0)
+        else:
+            data = np.mean(data, axis=1)
     if sr != sample_rate:
         data = librosa.resample(data.astype(np.float32), orig_sr=sr, target_sr=sample_rate)
         sr = sample_rate
@@ -78,7 +82,7 @@ def clean_audio_file(file_path: str, cache_path: Optional[str] = None) -> np.nda
     if audio is None or audio.size == 0:
         raise EmptyAudioError(f"Empty audio after loading: {file_path}")
     audio = normalize_audio(audio)
-    audio = trim_silence(audio)
+    # audio = trim_silence(audio)
     if audio is None or audio.size == 0:
         raise EmptyAudioError(f"Empty audio after trimming: {file_path}")
     audio = pad_or_crop(audio)

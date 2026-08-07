@@ -14,7 +14,7 @@ from features.feature_extraction import extract_log_mel
 from preprocessing.audio_cleaning import normalize_audio, pad_or_crop
 from inference import load_model
 from utils import int_to_label, risk_from_probability
-
+from config import TARGET_SAMPLE_RATE, MODEL_DIR, FEATURE_TYPE
 SSE_CLIENTS = []
 SSE_LOCK = threading.Lock()
 

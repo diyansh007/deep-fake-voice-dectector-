@@ -13,6 +13,13 @@ models/train.log
 models/tensorboard/
 models/*.wav
 
+# Ignore generated dataset metadata and local dataset files
+data/metadata/*.csv
+personal_dataset.csv
+
+# Ignore raw dataset folders
+Main data set/
+
 # Ignore python build artifacts
 __pycache__/
 *.py[cod]

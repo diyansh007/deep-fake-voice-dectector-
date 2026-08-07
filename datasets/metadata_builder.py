@@ -6,6 +6,8 @@ from preprocessing.audio_cleaning import load_audio, EmptyAudioError as AudioCle
 from datasets.asvspoof2019_parser import parse_asvspoof2019_protocol
 from datasets.fake_or_real_parser import parse_fake_or_real_dataset
 from datasets.wavefake_parser import parse_wavefake_dataset
+from datasets.common_voice_hi_parser import parse_common_voice_hi_dataset
+from datasets.personal_voice_parser import parse_personal_voice_dataset
 
 
 def build_metadata_for_asvspoof2019() -> pd.DataFrame:
@@ -50,6 +52,17 @@ def build_metadata_for_wavefake(force_rebuild: bool = False) -> pd.DataFrame:
     return validate_metadata(records)
 
 
+def build_metadata_for_common_voice_hi() -> pd.DataFrame:
+    dataset_cfg = DATASET_CONFIG["common_voice_hi"]
+    root_path = dataset_cfg["root_path"]
+    if not os.path.isdir(root_path):
+        return pd.DataFrame()
+    records = parse_common_voice_hi_dataset(root_path)
+    if records.empty:
+        return pd.DataFrame()
+    return validate_metadata(records)
+
+
 def get_or_build_metadata(dataset_name: str = "asvspoof2019", force_rebuild: bool = False) -> pd.DataFrame:
     if dataset_name not in DATASET_CONFIG:
         raise ValueError(f"Unsupported dataset: {dataset_name}")
@@ -67,6 +80,15 @@ def get_or_build_metadata(dataset_name: str = "asvspoof2019", force_rebuild: boo
         metadata = build_metadata_for_fake_or_real(force_rebuild=force_rebuild)
     elif dataset_name == "wavefake":
         metadata = build_metadata_for_wavefake(force_rebuild=force_rebuild)
+    elif dataset_name == "common_voice_hi":
+        metadata = build_metadata_for_common_voice_hi()
+    elif dataset_name == "personal_voice":
+        dataset_cfg = DATASET_CONFIG["personal_voice"]
+        root = dataset_cfg.get("root_path")
+        if root and os.path.isdir(root):
+            metadata = parse_personal_voice_dataset(root)
+        else:
+            metadata = pd.DataFrame()
     else:
         metadata = pd.DataFrame()
 

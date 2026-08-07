@@ -47,26 +47,50 @@ def int_to_label(index: int):
 def compute_metrics(y_true, y_pred, y_prob=None):
     y_true = np.array(y_true)
     y_pred = np.array(y_pred)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
+
+    def safe_precision():
+        if fp + tp == 0:
+            return None
+        return float(precision_score(y_true, y_pred, zero_division=0))
+
+    def safe_recall():
+        if fn + tp == 0:
+            return None
+        return float(recall_score(y_true, y_pred, zero_division=0))
+
+    precision = safe_precision()
+    recall = safe_recall()
+    if precision is None or recall is None:
+        f1 = None
+    else:
+        f1 = float(f1_score(y_true, y_pred, zero_division=0))
+
     metrics = {
         "accuracy": float(accuracy_score(y_true, y_pred)),
-        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-    }
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    metrics.update({
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
         "tn": int(tn),
         "fp": int(fp),
         "fn": int(fn),
         "tp": int(tp),
         "false_positive_rate": float(fp / (fp + tn) if (fp + tn) > 0 else 0.0),
         "false_negative_rate": float(fn / (fn + tp) if (fn + tp) > 0 else 0.0),
-    })
+        "eer": None,
+    }
     if y_prob is not None:
         try:
             metrics["roc_auc"] = float(roc_auc_score(y_true, y_prob[:, 1]))
         except Exception:
             metrics["roc_auc"] = None
+        if metrics["roc_auc"] is not None:
+            try:
+                metrics["eer"] = compute_eer(y_true, y_prob[:, 1])
+            except Exception:
+                metrics["eer"] = None
+    else:
+        metrics["roc_auc"] = None
     return metrics
 
 

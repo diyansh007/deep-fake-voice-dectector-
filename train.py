@@ -4,7 +4,7 @@ import os
 import numpy as np
 import torch
 import pandas as pd
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 from torch.cuda.amp import autocast, GradScaler
 from sklearn.model_selection import train_test_split
@@ -32,12 +32,26 @@ def build_data_loaders(metadata: pd.DataFrame, batch_size: int, feature_type: st
         val_split = None
     else:
         val_split = "dev"
+
     train_dataset = SpoofAudioDataset(train_meta, split="train", feature_type=feature_type, augment_fn=augment_audio)
     val_dataset = SpoofAudioDataset(val_meta, split=val_split, feature_type=feature_type, augment_fn=None)
+
+    train_labels = train_meta["label"].values
+    class_sample_counts = np.bincount(train_labels, minlength=2)
+    class_weights = 1.0 / np.where(class_sample_counts > 0, class_sample_counts, 1.0)
+    sample_weights = class_weights[train_labels]
+    # Dataset-level oversampling: boost samples from `personal_voice` by ~5x
+    dataset_multipliers = None
+    if "source_dataset" in train_meta.columns:
+        # default multiplier 1.0
+        multipliers = train_meta["source_dataset"].apply(lambda d: 5.0 if d == "personal_voice" else 1.0).values
+        sample_weights = sample_weights * multipliers
+    sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=sampler,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         prefetch_factor=2,
@@ -55,11 +69,38 @@ def build_data_loaders(metadata: pd.DataFrame, batch_size: int, feature_type: st
     return train_loader, val_loader
 
 
-def train(epochs: int, batch_size: int, dataset_name: str, force_rebuild: bool):
+def fmt(v):
+    return "N/A" if v is None else f"{v:.4f}"
+
+
+def parse_dataset_list(dataset_list: str) -> list[str]:
+    return [item.strip() for item in dataset_list.split(",") if item.strip()]
+
+
+def train(epochs: int, batch_size: int, dataset_name: str, datasets: str, force_rebuild: bool):
     set_seed(RANDOM_SEED)
     logger = setup_logger("train", os.path.join(MODEL_DIR, "train.log"))
-    metadata = get_or_build_metadata(dataset_name, force_rebuild=force_rebuild)
-    logger.info(f"Metadata loaded with {len(metadata)} rows for dataset {dataset_name}.")
+
+    if datasets:
+        dataset_names = parse_dataset_list(datasets)
+        invalid = [name for name in dataset_names if name not in DATASET_CONFIG]
+        if invalid:
+            raise ValueError(f"Unsupported datasets: {invalid}")
+        metadata_frames = []
+        for name in dataset_names:
+            metadata_frames.append(get_or_build_metadata(name, force_rebuild=force_rebuild))
+        metadata = pd.concat(metadata_frames, ignore_index=True)
+        metadata["dataset_name"] = metadata["dataset_name"].astype(str)
+        logger.info(f"Metadata loaded with {len(metadata)} rows for datasets {dataset_names}.")
+        metadata["source_dataset"] = metadata["dataset_name"]
+        metadata["dataset_name"] = ",".join(dataset_names)
+        save_suffix = "mixed"
+    else:
+        metadata = get_or_build_metadata(dataset_name, force_rebuild=force_rebuild)
+        logger.info(f"Metadata loaded with {len(metadata)} rows for dataset {dataset_name}.")
+        metadata["source_dataset"] = metadata["dataset_name"]
+        save_suffix = dataset_name
+
     class_counts = metadata[metadata["split"] == "train"]["label"].value_counts().to_dict()
     logger.info(f"Train split class distribution: {class_counts}")
 
@@ -73,20 +114,17 @@ def train(epochs: int, batch_size: int, dataset_name: str, force_rebuild: bool):
     model = SpectrogramResNet(num_classes=2, in_channels=3 if FEATURE_TYPE == "log_mel_delta" else 1).to(device)
 
     # Select checkpoint based on dataset
-    if dataset_name == "fake_or_real":
-        checkpoint_path = os.path.join(MODEL_DIR, "best_model_for.pth")
-
-        # If this is the first Fake-or-Real run, fall back to the ASVspoof model
-        if not os.path.exists(checkpoint_path):
-            checkpoint_path = os.path.join(MODEL_DIR, "best_model.pth")
-    else:
-        checkpoint_path = os.path.join(MODEL_DIR, "best_model.pth")
-
-    if os.path.exists(checkpoint_path):
-        print(f"Loading pretrained weights from {checkpoint_path}")
-        state_dict = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(state_dict)
-    else:
+    # Prefer mixed checkpoint if available, otherwise fall back to generic best model
+    preferred = [os.path.join(MODEL_DIR, "best_model_mixed.pth"), os.path.join(MODEL_DIR, "best_model.pth")]
+    loaded = False
+    for checkpoint_path in preferred:
+        if os.path.exists(checkpoint_path):
+            print(f"Loading pretrained weights from {checkpoint_path}")
+            state_dict = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(state_dict)
+            loaded = True
+            break
+    if not loaded:
         print("No pretrained checkpoint found. Training from scratch.")
 
     optimizer = torch.optim.AdamW(
@@ -170,38 +208,80 @@ def train(epochs: int, batch_size: int, dataset_name: str, force_rebuild: bool):
         history["precision"].append(metrics["precision"])
         history["recall"].append(metrics["recall"])
         history["f1"].append(metrics["f1"])
-        history["roc_auc"].append(metrics.get("roc_auc", 0.0))
+        history["roc_auc"].append(metrics.get("roc_auc"))
         history["lr"].append(optimizer.param_groups[0]["lr"])
         writer.add_scalar("Loss/train", train_loss, epoch)
         writer.add_scalar("Loss/val", val_loss, epoch)
         writer.add_scalar("Accuracy/val", metrics["accuracy"], epoch)
-        writer.add_scalar("Precision/val", metrics["precision"], epoch)
-        writer.add_scalar("Recall/val", metrics["recall"], epoch)
-        writer.add_scalar("F1/val", metrics["f1"], epoch)
-        writer.add_scalar("ROC_AUC/val", metrics.get("roc_auc", 0.0), epoch)
+        if metrics["precision"] is not None:
+            writer.add_scalar("Precision/val", metrics["precision"], epoch)
+        if metrics["recall"] is not None:
+            writer.add_scalar("Recall/val", metrics["recall"], epoch)
+        if metrics["f1"] is not None:
+            writer.add_scalar("F1/val", metrics["f1"], epoch)
+        if metrics.get("roc_auc") is not None:
+            writer.add_scalar("ROC_AUC/val", metrics["roc_auc"], epoch)
+        if metrics.get("eer") is not None:
+            writer.add_scalar("EER/val", metrics["eer"], epoch)
+        if metrics.get("false_positive_rate") is not None:
+            writer.add_scalar("FalsePositiveRate/val", metrics["false_positive_rate"], epoch)
+        if metrics.get("false_negative_rate") is not None:
+            writer.add_scalar("FalseNegativeRate/val", metrics["false_negative_rate"], epoch)
         writer.add_scalar("LR", optimizer.param_groups[0]["lr"], epoch)
         scheduler.step(metrics.get("roc_auc", metrics["f1"]))
         logger.info(
-            f"Epoch {epoch}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, accuracy={metrics['accuracy']:.4f}, precision={metrics['precision']:.4f}, recall={metrics['recall']:.4f}, f1={metrics['f1']:.4f}, roc_auc={metrics.get('roc_auc', 0.0):.4f}, fp={metrics['fp']}, fn={metrics['fn']}"
+            f"Epoch {epoch}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}, "
+            f"accuracy={fmt(metrics['accuracy'])}, precision={fmt(metrics['precision'])}, "
+            f"recall={fmt(metrics['recall'])}, f1={fmt(metrics['f1'])}, "
+            f"roc_auc={fmt(metrics.get('roc_auc'))}, eer={fmt(metrics.get('eer'))}, "
+            f"false_positive_rate={fmt(metrics.get('false_positive_rate'))}, "
+            f"false_negative_rate={fmt(metrics.get('false_negative_rate'))}, "
+            f"fp={metrics['fp']}, fn={metrics['fn']}"
         )
 
-        current_score = metrics.get(TRAINING_CONFIG["early_stop_monitor"], metrics["f1"])
+        if metrics["f1"] is not None:
+            current_score = metrics["f1"]
+        elif metrics["accuracy"] is not None:
+            current_score = metrics["accuracy"]
+        else:
+            current_score = -float("inf")
+
         if current_score > best_val_score:
             best_val_score = current_score
             patience_counter = 0
-            if dataset_name == "fake_or_real":
-                best_model_path = os.path.join(MODEL_DIR, "best_model_for.pth")
+            # Determine save path. If personal adaptation is happening, save as best_model_personal.pth
+            if datasets and "personal_voice" in metadata["source_dataset"].unique():
+                base_path = os.path.join(MODEL_DIR, "best_model_personal.pth")
+            elif datasets:
+                base_path = os.path.join(MODEL_DIR, "best_model_mixed.pth")
+            elif dataset_name in ["fake_or_real", "common_voice_hi"]:
+                base_path = os.path.join(MODEL_DIR, "best_model_for.pth")
             else:
-                best_model_path = os.path.join(MODEL_DIR, "best_model.pth")
-            torch.save(model.state_dict(), best_model_path)
-            logger.info(f"Saved best model at epoch {epoch} with best_{TRAINING_CONFIG['early_stop_monitor']}={best_val_score:.4f} to {best_model_path}.")
+                base_path = os.path.join(MODEL_DIR, "best_model.pth")
+
+            # Do not overwrite existing checkpoint: choose a new filename if necessary
+            save_path = base_path
+            if os.path.exists(save_path):
+                # append numeric suffix
+                idx = 1
+                while True:
+                    candidate = os.path.splitext(base_path)[0] + f"_{idx}.pth"
+                    if not os.path.exists(candidate):
+                        save_path = candidate
+                        break
+                    idx += 1
+
+            torch.save(model.state_dict(), save_path)
+            logger.info(f"Saved best model at epoch {epoch} with best_{TRAINING_CONFIG['early_stop_monitor']}={best_val_score:.4f} to {save_path}.")
         else:
             patience_counter += 1
             if patience_counter >= TRAINING_CONFIG["patience"]:
                 logger.info("Early stopping triggered.")
                 break
 
-    if dataset_name == "fake_or_real":
+    if datasets:
+        last_model_path = os.path.join(MODEL_DIR, "last_model_mixed.pth")
+    elif dataset_name == "fake_or_real":
         last_model_path = os.path.join(MODEL_DIR, "last_model_for.pth")
     else:
         last_model_path = os.path.join(MODEL_DIR, "last_model.pth")
@@ -244,6 +324,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=TRAINING_CONFIG["epochs"], help="Number of training epochs.")
     parser.add_argument("--batch-size", type=int, default=TRAINING_CONFIG["batch_size"], help="Training batch size.")
     parser.add_argument("--dataset", type=str, default="asvspoof2019", choices=list(DATASET_CONFIG.keys()), help="Dataset to build metadata and train on.")
+    parser.add_argument("--datasets", type=str, default="", help="Comma-separated list of datasets to build metadata and train on together.")
     parser.add_argument("--force-rebuild", action="store_true", help="Rebuild metadata even if cached metadata exists.")
     args = parser.parse_args()
-    train(args.epochs, args.batch_size, args.dataset, args.force_rebuild)
+    train(args.epochs, args.batch_size, args.dataset, args.datasets, args.force_rebuild)

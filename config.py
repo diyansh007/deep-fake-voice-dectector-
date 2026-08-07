@@ -12,6 +12,8 @@ METADATA_PATHS = {
     "asvspoof2019": os.path.join(METADATA_DIR, "asvspoof2019_metadata.csv"),
     "fake_or_real": os.path.join(METADATA_DIR, "fake_or_real_metadata.csv"),
     "wavefake": os.path.join(METADATA_DIR, "wavefake_metadata.csv"),
+    "common_voice_hi": os.path.join(METADATA_DIR, "common_voice_hi_metadata.csv"),
+    "personal_voice": os.path.join(METADATA_DIR, "personal_voice_metadata.csv"),
     "combined": os.path.join(METADATA_DIR, "metadata.csv"),
 }
 METADATA_PATH = METADATA_PATHS["asvspoof2019"]
@@ -73,6 +75,18 @@ DATASET_CONFIG = {
         "metadata_path": METADATA_PATHS["wavefake"],
         "root_path": os.path.join(BASE_DIR, "Main data set", "WaveFake"),
         "generated_audio_path": os.path.join(BASE_DIR, "Main data set", "WaveFake", "generated_audio"),
+    },
+    "common_voice_hi": {
+        "name": "Common Voice Hindi",
+        "type": "common_voice_hi",
+        "metadata_path": os.path.join(METADATA_DIR, "common_voice_hi_metadata.csv"),
+        "root_path": os.path.join(BASE_DIR, "Main data set", "cv-hindi", "hi"),
+    },
+    "personal_voice": {
+        "name": "Personal Voice",
+        "type": "personal_voice",
+        "metadata_path": os.path.join(METADATA_DIR, "personal_voice_metadata.csv"),
+        "root_path": os.path.join(BASE_DIR, "Main data set", "training voice model"),
     },
 }
 
