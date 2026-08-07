@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Live Spoof Detection</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .status { font-size: 1.2rem; margin-bottom: 1rem; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; max-width: 540px; }
+    .label { font-size: 1.6rem; font-weight: bold; }
+    .high { color: #b00; }
+    .low { color: #080; }
+    .info { margin-top: 8px; }
+    pre { background: #f5f5f5; padding: 12px; border-radius: 8px; overflow: auto; }
+    button { padding: 10px 16px; font-size: 1rem; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="status">Live stream connected. Waiting for events...</div>
+    <button id="recordButton">Record & Analyze 4s</button>
+    <div class="label" id="label">-</div>
+    <div class="info"><strong>AI probability:</strong> <span id="prob">-</span></div>
+    <div class="info"><strong>Risk:</strong> <span id="risk">-</span></div>
+    <div class="info"><strong>Raw JSON:</strong></div>
+    <pre id="json">{}</pre>
+  </div>
+  <script>
+    const eventSource = new EventSource('/events');
+    const labelEl = document.getElementById('label');
+    const probEl = document.getElementById('prob');
+    const riskEl = document.getElementById('risk');
+    const jsonEl = document.getElementById('json');
+    const statusEl = document.querySelector('.status');
+    const recordButton = document.getElementById('recordButton');
+
+    eventSource.onopen = () => {
+      statusEl.textContent = 'Connected to stream.';
+    };
+    eventSource.onerror = () => {
+      statusEl.textContent = 'Connection lost; retrying...';
+    };
+    eventSource.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      statusEl.textContent = 'Last update: ' + new Date().toLocaleTimeString();
+      labelEl.textContent = data.label;
+      labelEl.className = data.label === 'AI-generated' ? 'label high' : 'label low';
+      probEl.textContent = (data.ai_probability * 100).toFixed(2) + '%';
+      riskEl.textContent = data.risk;
+      jsonEl.textContent = JSON.stringify(data, null, 2);
+    };
+
+    recordButton.addEventListener('click', async () => {
+      recordButton.disabled = true;
+      recordButton.textContent = 'Processing...';
+      statusEl.textContent = 'Recording and analyzing...';
+      try {
+        const response = await fetch('/record', { method: 'POST' });
+        const data = await response.json();
+        if (response.ok) {
+          statusEl.textContent = 'Recorded result received.';
+          labelEl.textContent = data.label;
+          labelEl.className = data.label === 'AI-generated' ? 'label high' : 'label low';
+          probEl.textContent = (data.ai_probability * 100).toFixed(2) + '%';
+          riskEl.textContent = data.risk;
+          jsonEl.textContent = JSON.stringify(data, null, 2);
+        } else {
+          statusEl.textContent = 'Error: ' + (data.error || 'Unknown error');
+        }
+      } catch (err) {
+        statusEl.textContent = 'Request failed: ' + err.message;
+      } finally {
+        recordButton.disabled = false;
+        recordButton.textContent = 'Record & Analyze 4s';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+torch>=2.0.0
+ torchvision>=0.15.0
+ torchaudio>=2.0.0
+ numpy
+ pandas
+ librosa
+ scikit-learn
+ matplotlib
+ seaborn
+ soundfile
+ tqdm
+ pyyaml
+ tensorboard
+ sounddevice

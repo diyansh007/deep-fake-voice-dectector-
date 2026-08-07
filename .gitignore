@@ -1,0 +1,24 @@
+# Ignore local caches, temporary files, and large dataset storage
+cache/
+logs/
+plots/
+saved_models/
+Main data set/
+
+# Ignore model checkpoint artifacts
+models/*.pth
+models/train.log
+models/tensorboard/
+models/*.wav
+
+# Ignore local audio and generated artifact folders
+audio/
+
+# Ignore python build artifacts
+__pycache__/
+*.py[cod]
+
+# Ignore editor and system files
+.DS_Store
+._*
+.vscode/
