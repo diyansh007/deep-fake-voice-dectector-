@@ -78,3 +78,12 @@ Labels are mapped consistently:
 - The feature pipeline uses Log-Mel Spectrogram as the main input.
 - Augmentation is applied only during training.
 - The model and pipeline are designed to support future datasets without rewriting core training logic.
+
+
+## Experimental Forensic Analysis (research prototype)
+
+A separate experimental entry point adds decision-triggered shifted-window re-analysis, cross-window acoustic-continuity review, and a transformation-sensitivity audit. It leaves the original offline and streaming entry points unchanged while the additions are validated.
+
+    python forensic_inference.py path/to/audio.wav --model models/best_model.pth --output report.json
+
+Read docs/EXPERIMENTAL_FORENSICS.md before interpreting results. Adaptive fusion and quality metrics are heuristics; continuity flags are review prompts; the transformation audit is not a watermark detector and cannot prove watermark dependence. These extensions are research prototypes, not validated or demonstrated to be patentable.
