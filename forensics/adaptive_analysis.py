@@ -210,13 +210,15 @@ def _transformation_sensitivity_audit(model, device, audio: np.ndarray) -> dict[
     frequencies = np.fft.rfftfreq(len(x), d=1.0 / TARGET_SAMPLE_RATE)
     spectrum[frequencies > 6000.0] = 0
     band_limited = np.fft.irfft(spectrum, n=len(x)).astype(np.float32)
+    clipped = np.clip(x, -0.25, 0.25).astype(np.float32)
     variants = {
         "baseline": x,
-        "gain_0_9": x * 0.9,
-        "gain_1_1": np.clip(x * 1.1, -1.0, 1.0),
+        # Gain-only variants are intentionally omitted because the standard
+        # preprocessing normalizes peak amplitude, largely cancelling pure gain.
         "low_level_noise": x + rng.normal(0.0, noise_scale, size=x.shape).astype(np.float32),
         "resample_roundtrip_12khz": roundtrip.astype(np.float32),
         "band_limited_6khz": band_limited,
+        "clipped_amplitude": clipped,
     }
     scores = {name: predict_ai_probability(model, device, value) for name, value in variants.items()}
     values = np.asarray(list(scores.values()), dtype=np.float64)
